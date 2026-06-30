@@ -1,0 +1,62 @@
+# Redrob Hackathon — Submission Metadata
+
+team_name: "team_antigravity"
+
+primary_contact:
+  name: "Participant"
+  email: "participant@example.com"
+  phone: "+91-XXXXXXXXXX"
+
+team_members:
+  - name: "Participant"
+    email: "participant@example.com"
+    role: "ML Engineer / Team Lead"
+
+github_repo: "https://github.com/YOUR_USERNAME/redrob-ranker"
+
+sandbox_link: "https://huggingface.co/spaces/YOUR_USERNAME/redrob-ranker"
+
+reproduce_command: "python rank.py --candidates ./candidates.jsonl --out ./submission.csv"
+
+compute:
+  platform: "Windows 10 / Python 3.10"
+  cpu_cores: 8
+  ram_gb: 16
+  python_version: "3.10"
+  os: "Windows 10"
+  uses_gpu_for_inference: false
+  has_network_during_ranking: false
+  pre_computation_required: true
+  pre_computation_time_minutes: 15
+
+ai_tools_used:
+  - "Gemini"
+
+ai_usage_summary: |
+  Used Gemini for architecture discussion, code review and implementation. 
+  No candidate data was fed to any LLM. All scoring logic and feature engineering 
+  is original rule-based and ML engineering work.
+
+methodology_summary: |
+  Multi-signal ranking system optimised for NDCG@10. Key components:
+  1. Offline pre-computation: SentenceTransformer (all-MiniLM-L6-v2) encodes all 100K 
+     candidate summaries+skills and computes cosine similarity against the JD. 
+     Results cached in precomputed_features.csv (committed to Git).
+  2. Runtime ranker (rank.py): combines 7 signals — semantic similarity (30%), 
+     skill ontology match (20%), title relevance (15%), AI/ML experience years (12%), 
+     evidence/impact scoring (10%), behavioral engagement signals (8%), 
+     and total experience fit (5%). Soft location multiplier applied.
+  3. Honeypot detection: three hard rules — expert skills with 0 duration months, 
+     career date order/calculation anomalies, and claimed-vs-history experience mismatch > 2 years.
+  4. Consulting-only penalty (55% score multiplier) for candidates whose entire career 
+     is at Wipro/TCS/Infosys/Accenture/Cognizant/Capgemini.
+  5. Keyword-stuffing penalty for high buzzword count with zero measurable achievements.
+  6. Factual, candidate-specific reasoning generated from profile facts.
+  Runtime: < 5 seconds on CPU (uses precomputed_features.csv lookup + sklearn TF-IDF fallback).
+
+declarations:
+  read_submission_spec: true
+  code_is_original_work: true
+  no_collusion: true
+  honeypot_check_done: true
+  reproduction_tested: true

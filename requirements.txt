@@ -1,0 +1,8 @@
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.5
+huggingface-hub>=0.24.0
+sentence-transformers>=3.0
+streamlit
+plotly
+pyyaml

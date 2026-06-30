@@ -1,0 +1,190 @@
+/* Import Google Font Outfit */
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+
+/* Global Styles */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stSidebar"] {
+    background-color: #0e1117 !important;
+    font-family: 'Outfit', sans-serif !important;
+    color: #f7fafc !important;
+}
+
+/* Typography override for headers, text, inputs, labels, selectboxes, buttons */
+h1, h2, h3, h4, h5, h6, p, label, input, button, select, a {
+    font-family: 'Outfit', sans-serif !important;
+}
+
+/* Clean main container */
+.block-container {
+    padding-top: 3.5rem !important;
+    max-width: 95% !important;
+}
+
+/* Glassmorphism panels */
+.glass-panel {
+    background: rgba(26, 31, 44, 0.65) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border: 1px solid #2d3748 !important;
+    border-radius: 12px !important;
+    padding: 1.5rem !important;
+    margin-bottom: 1.5rem !important;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37) !important;
+}
+
+/* Metric Cards */
+.metric-card {
+    background: rgba(26, 31, 44, 0.65) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border: 1px solid #2d3748 !important;
+    border-radius: 12px !important;
+    padding: 1.25rem !important;
+    text-align: center !important;
+    box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.25) !important;
+    transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+.metric-card:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 30px 0 rgba(0, 242, 254, 0.15) !important;
+    border-color: #4facfe !important;
+}
+
+.metric-title {
+    font-size: 0.85rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.1em !important;
+    color: #a0aec0 !important;
+    margin-bottom: 0.5rem !important;
+    font-weight: 500 !important;
+}
+
+.metric-value {
+    font-size: 1.8rem !important;
+    font-weight: 700 !important;
+    background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+}
+
+/* Button style rules */
+.stButton button {
+    background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%) !important;
+    color: #0e1117 !important;
+    padding: 0.75rem 2.25rem !important;
+    font-size: 1.05rem !important;
+    font-weight: 700 !important;
+    border-radius: 8px !important;
+    border: none !important;
+    box-shadow: 0 4px 15px rgba(0, 242, 254, 0.3) !important;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+    cursor: pointer !important;
+    display: inline-block !important;
+    text-align: left !important;
+}
+
+.stButton button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 25px rgba(0, 242, 254, 0.5) !important;
+    color: #ffffff !important;
+}
+
+.stButton button:active {
+    transform: translateY(1px) !important;
+    box-shadow: 0 2px 10px rgba(0, 242, 254, 0.3) !important;
+}
+
+/* Timeline design */
+.timeline {
+    position: relative !important;
+    padding-left: 2rem !important;
+    margin-left: 0.5rem !important;
+    border-left: 2px solid #2d3748 !important;
+}
+
+.timeline-item {
+    position: relative !important;
+    margin-bottom: 2rem !important;
+}
+
+.timeline-dot {
+    position: absolute !important;
+    left: -2.4rem !important;
+    top: 0.25rem !important;
+    width: 12px !important;
+    height: 12px !important;
+    border-radius: 50% !important;
+    background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%) !important;
+    box-shadow: 0 0 8px #00f2fe !important;
+    border: 2px solid #0e1117 !important;
+}
+
+.timeline-content {
+    background: rgba(26, 31, 44, 0.4) !important;
+    border: 1px solid #2d3748 !important;
+    border-radius: 8px !important;
+    padding: 1rem !important;
+}
+
+.timeline-time {
+    font-size: 0.85rem !important;
+    color: #00f2fe !important;
+    font-weight: 600 !important;
+    margin-bottom: 0.25rem !important;
+}
+
+.timeline-title {
+    font-size: 1.1rem !important;
+    font-weight: 700 !important;
+    color: #ffffff !important;
+}
+
+.timeline-company {
+    font-size: 0.95rem !important;
+    color: #a0aec0 !important;
+    margin-bottom: 0.5rem !important;
+}
+
+/* Styling Streamlit widgets (inputs, selectboxes, sliders, metrics, tabs) */
+div[data-baseweb="select"] > div {
+    background-color: rgba(26, 31, 44, 0.8) !important;
+    border: 1px solid #2d3748 !important;
+    color: #ffffff !important;
+}
+
+input[type="text"] {
+    background-color: rgba(26, 31, 44, 0.8) !important;
+    border: 1px solid #2d3748 !important;
+    color: #ffffff !important;
+}
+
+.stSlider [data-testid="stTickBar"] {
+    color: #a0aec0 !important;
+}
+
+/* Style Tabs */
+button[data-baseweb="tab"] {
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+    color: #a0aec0 !important;
+    border-bottom: 2px solid transparent !important;
+    background: transparent !important;
+    padding: 0.5rem 1rem !important;
+    transition: all 0.2s ease !important;
+}
+
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: #00f2fe !important;
+    border-bottom: 2px solid #00f2fe !important;
+}
+
+/* Fit Rationale Callout */
+.fit-rationale-callout {
+    background: rgba(26, 31, 44, 0.8) !important;
+    backdrop-filter: blur(12px) !important;
+    border: 1px solid #2d3748 !important;
+    border-left: 4px solid #00f2fe !important;
+    border-radius: 8px !important;
+    padding: 1.25rem !important;
+    margin: 1rem 0 !important;
+}
