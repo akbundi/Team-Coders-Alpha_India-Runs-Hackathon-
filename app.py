@@ -22,6 +22,64 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# Optimized routine to extract profiles of specific candidates from database (JSON or JSONL)
+def load_profiles_for_candidates(candidate_ids, db_path):
+    candidate_ids_set = set(candidate_ids)
+    found_profiles = {}
+    
+    if not os.path.exists(db_path):
+        return found_profiles
+        
+    is_jsonl = db_path.endswith((".jsonl", ".jsonl.gz")) or not db_path.endswith(".json")
+    
+    if is_jsonl:
+        if db_path.endswith(".gz"):
+            import gzip
+            open_fn = gzip.open
+            mode = "rt"
+        else:
+            open_fn = open
+            mode = "r"
+            
+        try:
+            with open_fn(db_path, mode, encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    # Fast search for candidate_id in the line before full JSON parse
+                    idx = line.find('"candidate_id":')
+                    if idx != -1:
+                        start_quote = line.find('"', idx + 14)
+                        if start_quote != -1:
+                            end_quote = line.find('"', start_quote + 1)
+                            if end_quote != -1:
+                                cid = line[start_quote+1 : end_quote]
+                                if cid in candidate_ids_set:
+                                    try:
+                                        cand = json.loads(line)
+                                        found_profiles[cid] = cand
+                                        candidate_ids_set.remove(cid)
+                                    except Exception:
+                                        pass
+                    if not candidate_ids_set:
+                        break
+        except Exception as e:
+            st.error(f"Error reading candidate database {db_path}: {e}")
+    else:
+        try:
+            with open(db_path, "r", encoding="utf-8") as f:
+                candidates_data = json.load(f)
+                for cand in candidates_data:
+                    cid = cand.get("candidate_id")
+                    if cid in candidate_ids_set:
+                        found_profiles[cid] = cand
+                        candidate_ids_set.remove(cid)
+                    if not candidate_ids_set:
+                        break
+        except Exception as e:
+            st.error(f"Error reading candidate database {db_path}: {e}")
+            
+    return found_profiles
 
 # Custom function to make the score computing function
 def make_custom_compute_score(notice_period_cap, min_experience, tech_weight, behavioral_weight):
@@ -503,34 +561,177 @@ def cached_process_and_rank(file_path_or_bytes, file_suffix, notice_period_cap, 
         
     return final_list, total_count, honeypots, csv_content
 
+# Auto-load on startup if session state is empty
+if "ranked_list" not in st.session_state:
+    detected_csvs = [f for f in os.listdir(".") if f.endswith(".csv") and f != "precomputed_features.csv"]
+    if detected_csvs:
+        # Default choice file
+        selected_file = "submission-3.csv" if "submission-3.csv" in detected_csvs else (
+            "submission.csv" if "submission.csv" in detected_csvs else detected_csvs[0]
+        )
+        
+        # Default choice db
+        sibling_path = "../../../[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
+        abs_path = r"C:\Users\Manya\Downloads\[PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\candidates.jsonl"
+        db_path = "sample_candidates.json"
+        if os.path.exists(sibling_path):
+            db_path = sibling_path
+        elif os.path.exists(abs_path):
+            db_path = abs_path
+            
+        try:
+            df_csv = pd.read_csv(selected_file)
+            if all(col in df_csv.columns for col in ["candidate_id", "rank", "score", "reasoning"]):
+                candidate_ids = df_csv["candidate_id"].tolist()
+                profiles_dict = load_profiles_for_candidates(candidate_ids, db_path)
+                
+                final_list = []
+                for idx, row in df_csv.iterrows():
+                    cid = row["candidate_id"]
+                    cand_profile = profiles_dict.get(cid)
+                    if cand_profile:
+                        final_list.append({
+                            "candidate_id": cid,
+                            "rank": int(row["rank"]),
+                            "score": float(row["score"]),
+                            "reasoning": row["reasoning"],
+                            "profile": cand_profile["profile"],
+                            "redrob_signals": cand_profile["redrob_signals"],
+                            "skills": cand_profile["skills"],
+                            "career_history": cand_profile["career_history"]
+                        })
+                    else:
+                        final_list.append({
+                            "candidate_id": cid,
+                            "rank": int(row["rank"]),
+                            "score": float(row["score"]),
+                            "reasoning": row["reasoning"],
+                            "profile": {
+                                "anonymized_name": f"Candidate {cid}",
+                                "current_title": "Profile Details Missing",
+                                "location": "Unknown",
+                                "years_of_experience": 0,
+                                "summary": "To view full details, select the correct candidate database (e.g. candidates.jsonl) in the sidebar."
+                            },
+                            "redrob_signals": {},
+                            "skills": [],
+                            "career_history": []
+                        })
+                
+                if "sample" in db_path:
+                    total_count = 50
+                    honeypots = 3
+                else:
+                    total_count = 100000
+                    honeypots = 4200
+                    
+                # Run checks
+                temp_csv_path = os.path.join(tempfile.gettempdir(), f"startup_{selected_file}")
+                df_csv.to_csv(temp_csv_path, index=False)
+                validation_res = run_submission_checks(
+                    temp_csv_path,
+                    final_list,
+                    total_count,
+                    honeypots
+                )
+                try:
+                    os.remove(temp_csv_path)
+                except Exception:
+                    pass
+                    
+                st.session_state.ranked_list = final_list
+                st.session_state.total_candidates = total_count
+                st.session_state.honeypot_count = honeypots
+                st.session_state.csv_content = df_csv.to_csv(index=False)
+                st.session_state.validation_results = validation_res
+                
+                # Check for metadata
+                if os.path.exists("submission_metadata.yaml"):
+                    with open("submission_metadata.yaml", "r", encoding="utf-8") as f:
+                        st.session_state.yaml_content = f.read()
+                else:
+                    st.session_state.yaml_content = ""
+        except Exception:
+            pass
+
 # Sidebar Header
 st.sidebar.markdown("""
 <div style="text-align: center; margin-bottom: 1.5rem;">
     <h2 style="background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; margin:0;">
-        CONFIG SANDBOX
+        DASHBOARD CONFIG
     </h2>
 </div>
 """, unsafe_allow_html=True)
 
-# Toggle Sample Dataset
-use_sample = st.sidebar.checkbox("Use Sample Dataset", value=True)
+# Sidebar Mode Selector
+db_mode = st.sidebar.selectbox(
+    "Dashboard Mode",
+    ["Inspect Submission CSV", "Interactive Sandbox (Run Ranker)"]
+)
 
-# File Uploader
-uploaded_file = None
-if not use_sample:
-    uploaded_file = st.sidebar.file_uploader("Upload candidates (.json, .jsonl, .jsonl.gz)", type=["json", "jsonl", "gz"])
+if db_mode == "Interactive Sandbox (Run Ranker)":
+    # Toggle Sample Dataset
+    use_sample = st.sidebar.checkbox("Use Sample Dataset", value=True)
 
-# Sliders
-st.sidebar.markdown("### Algorithmic Multipliers")
-notice_period_cap = st.sidebar.slider("Notice Period Cap (Days)", min_value=0, max_value=180, value=90)
-min_experience = st.sidebar.slider("Minimum Experience (Years)", min_value=0, max_value=15, value=4)
-tech_weight = st.sidebar.slider("Technical Match Weight", min_value=0, max_value=100, value=70)
-behavioral_weight = st.sidebar.slider("Behavioral Weight", min_value=0, max_value=100, value=30)
+    # File Uploader
+    uploaded_file = None
+    if not use_sample:
+        uploaded_file = st.sidebar.file_uploader("Upload candidates (.json, .jsonl, .jsonl.gz)", type=["json", "jsonl", "gz"])
 
-# Metadata Text Inputs
-st.sidebar.markdown("### Submission Metadata")
-team_name = st.sidebar.text_input("Team Name", value="team_antigravity")
-contact_email = st.sidebar.text_input("Contact Email", value="participant@example.com")
+    # Sliders
+    st.sidebar.markdown("### Algorithmic Multipliers")
+    notice_period_cap = st.sidebar.slider("Notice Period Cap (Days)", min_value=0, max_value=180, value=90)
+    min_experience = st.sidebar.slider("Minimum Experience (Years)", min_value=0, max_value=15, value=4)
+    tech_weight = st.sidebar.slider("Technical Match Weight", min_value=0, max_value=100, value=70)
+    behavioral_weight = st.sidebar.slider("Behavioral Weight", min_value=0, max_value=100, value=30)
+
+    # Metadata Text Inputs
+    st.sidebar.markdown("### Submission Metadata")
+    team_name = st.sidebar.text_input("Team Name", value="team_antigravity")
+    contact_email = st.sidebar.text_input("Contact Email", value="participant@example.com")
+else:
+    # Defaults matching the submission generator
+    notice_period_cap = 90
+    min_experience = 4
+    tech_weight = 70
+    behavioral_weight = 30
+    use_sample = False
+    
+    # Submission CSV Selector
+    st.sidebar.markdown("### Select Submission File")
+    detected_csvs = [f for f in os.listdir(".") if f.endswith(".csv") and f != "precomputed_features.csv"]
+    detected_csvs.sort()
+    
+    selected_csv_file = None
+    if detected_csvs:
+        # Default to submission-3.csv if available
+        default_index = 0
+        if "submission-3.csv" in detected_csvs:
+            default_index = detected_csvs.index("submission-3.csv")
+        elif "submission.csv" in detected_csvs:
+            default_index = detected_csvs.index("submission.csv")
+            
+        selected_csv_file = st.sidebar.selectbox("Detected CSVs", detected_csvs, index=default_index)
+        
+    uploaded_csv = st.sidebar.file_uploader("Or Upload Submission CSV", type=["csv"])
+    
+    # Candidate Database Path
+    st.sidebar.markdown("### Candidate Profile Database")
+    db_options = ["sample_candidates.json"]
+    sibling_path = "../../../[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
+    abs_path = r"C:\Users\Manya\Downloads\[PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\candidates.jsonl"
+    
+    if os.path.exists(sibling_path):
+        db_options.append(sibling_path)
+    elif os.path.exists(abs_path):
+        db_options.append(abs_path)
+        
+    # Default to the full database path if available (index 1)
+    default_db_index = 0
+    if len(db_options) > 1:
+        default_db_index = 1
+        
+    db_path = st.sidebar.selectbox("Candidate Profiles DB Path", db_options, index=default_db_index)
 
 # Main page Header
 st.markdown("""
@@ -544,82 +745,209 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Layout for Run Ranker button
-btn_col, _ = st.columns([1, 4])
-with btn_col:
-    run_btn = st.button("Run Ranker", use_container_width=False)
+if db_mode == "Interactive Sandbox (Run Ranker)":
+    # Layout for Run Ranker button
+    btn_col, _ = st.columns([1, 4])
+    with btn_col:
+        run_btn = st.button("Run Ranker", use_container_width=False)
 
-# Trigger ranker
-if run_btn:
-    # Determine the file to process
-    file_data = None
-    file_suffix = ""
+    # Trigger ranker
+    if run_btn:
+        # Determine the file to process
+        file_data = None
+        file_suffix = ""
+        
+        if use_sample:
+            file_data = "sample_candidates.json"
+        elif uploaded_file is not None:
+            file_data = uploaded_file.getvalue()
+            file_suffix = "".join(Path(uploaded_file.name).suffixes)
+        else:
+            st.warning("⚠️ Please upload a candidates dataset in the sidebar or toggle 'Use Sample Dataset' to use the pre-loaded pool.")
+            
+        if file_data is not None:
+            # Simulate progress bar
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            steps = [
+                ("Initializing pipeline...", 0.1, 20),
+                ("Loading candidates database...", 0.1, 40),
+                ("Filtering honeypot profiles...", 0.2, 60),
+                ("Evaluating technical match & behavioral signals...", 0.1, 80),
+                ("Finalizing candidate ranking...", 0.1, 100)
+            ]
+
+            for text, duration, progress in steps:
+                status_text.text(text)
+                time.sleep(duration)
+                progress_bar.progress(progress)
+                
+            # Clean up progress bar
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Execute the ranker using the cached function
+            final_list, total_count, honeypots, csv_content = cached_process_and_rank(
+                file_data,
+                file_suffix,
+                notice_period_cap,
+                min_experience,
+                tech_weight,
+                behavioral_weight
+            )
+            
+            # Save to disk
+            with open("submission.csv", "w", encoding="utf-8", newline="") as csv_file:
+                csv_file.write(csv_content)
+                
+            # Save updated metadata to disk
+            updated_yaml = update_yaml_metadata("submission_metadata.yaml", team_name, contact_email)
+            with open("submission_metadata.yaml", "w", encoding="utf-8") as yaml_file:
+                yaml_file.write(updated_yaml)
+                
+            # Store in session state for cross-interaction persistence
+            st.session_state.ranked_list = final_list
+            st.session_state.total_candidates = total_count
+            st.session_state.honeypot_count = honeypots
+            st.session_state.csv_content = csv_content
+            st.session_state.yaml_content = updated_yaml
+            
+            # Execute checks on the saved submission.csv
+            st.session_state.validation_results = run_submission_checks(
+                "submission.csv", 
+                final_list, 
+                total_count, 
+                honeypots
+            )
+            
+            st.success("🎉 Ranking complete! Results successfully loaded.")
+else:
+    # "Inspect Submission CSV" Mode
+    csv_source = None
+    csv_name = ""
     
-    if use_sample:
-        file_data = "sample_candidates.json"
-    elif uploaded_file is not None:
-        file_data = uploaded_file.getvalue()
-        file_suffix = "".join(Path(uploaded_file.name).suffixes)
+    if uploaded_csv is not None:
+        csv_source = uploaded_csv
+        csv_name = uploaded_csv.name
+    elif selected_csv_file is not None:
+        csv_source = selected_csv_file
+        csv_name = selected_csv_file
+        
+    if csv_source is not None:
+        try:
+            if isinstance(csv_source, str):
+                df_csv = pd.read_csv(csv_source)
+                with open(csv_source, "r", encoding="utf-8") as f:
+                    csv_content = f.read()
+            else:
+                csv_bytes = csv_source.getvalue()
+                csv_content = csv_bytes.decode("utf-8")
+                from io import StringIO
+                df_csv = pd.read_csv(StringIO(csv_content))
+                
+            required_cols = ["candidate_id", "rank", "score", "reasoning"]
+            if not all(col in df_csv.columns for col in required_cols):
+                st.error(f"CSV must contain columns: {', '.join(required_cols)}")
+            else:
+                candidate_ids = df_csv["candidate_id"].tolist()
+                
+                # Check cache to avoid reloading on every interaction
+                cache_key = f"{csv_name}_{db_path}"
+                if "profile_cache_key" not in st.session_state or st.session_state.profile_cache_key != cache_key:
+                    with st.spinner(f"Scanning profile database ({os.path.basename(db_path)}) for candidate details..."):
+                        profiles_dict = load_profiles_for_candidates(candidate_ids, db_path)
+                        st.session_state.cached_profiles = profiles_dict
+                        st.session_state.profile_cache_key = cache_key
+                else:
+                    profiles_dict = st.session_state.cached_profiles
+                    
+                # Build ranked list
+                final_list = []
+                missing_count = 0
+                for idx, row in df_csv.iterrows():
+                    cid = row["candidate_id"]
+                    rank = int(row["rank"])
+                    score = float(row["score"])
+                    reasoning = row["reasoning"]
+                    
+                    cand_profile = profiles_dict.get(cid)
+                    if cand_profile:
+                        final_list.append({
+                            "candidate_id": cid,
+                            "rank": rank,
+                            "score": score,
+                            "reasoning": reasoning,
+                            "profile": cand_profile["profile"],
+                            "redrob_signals": cand_profile["redrob_signals"],
+                            "skills": cand_profile["skills"],
+                            "career_history": cand_profile["career_history"]
+                        })
+                    else:
+                        missing_count += 1
+                        final_list.append({
+                            "candidate_id": cid,
+                            "rank": rank,
+                            "score": score,
+                            "reasoning": reasoning,
+                            "profile": {
+                                "anonymized_name": f"Candidate {cid}",
+                                "current_title": "Profile Details Missing",
+                                "location": "Unknown",
+                                "years_of_experience": 0,
+                                "summary": "To view full details, select the correct candidate database (e.g. candidates.jsonl) in the sidebar."
+                            },
+                            "redrob_signals": {},
+                            "skills": [],
+                            "career_history": []
+                        })
+                        
+                if missing_count > 0:
+                    st.warning(f"⚠️ {missing_count} candidate profiles were not found in {os.path.basename(db_path)}. Switch the profile database path in the sidebar to load all details.")
+                else:
+                    st.success(f"🎉 Successfully loaded and validated {csv_name}!")
+                    
+                # Determine total count and honeypots from candidate db
+                if "sample" in db_path:
+                    total_count = 50
+                    honeypots = 3
+                else:
+                    total_count = 100000
+                    honeypots = 4200
+                    
+                # Write temp file to validate
+                temp_csv_path = os.path.join(tempfile.gettempdir(), f"temp_{csv_name}")
+                with open(temp_csv_path, "w", encoding="utf-8", newline="") as f:
+                    f.write(csv_content)
+                    
+                validation_res = run_submission_checks(
+                    temp_csv_path,
+                    final_list,
+                    total_count,
+                    honeypots
+                )
+                
+                try:
+                    os.remove(temp_csv_path)
+                except Exception:
+                    pass
+                    
+                st.session_state.ranked_list = final_list
+                st.session_state.total_candidates = total_count
+                st.session_state.honeypot_count = honeypots
+                st.session_state.csv_content = csv_content
+                st.session_state.validation_results = validation_res
+                
+                if os.path.exists("submission_metadata.yaml"):
+                    with open("submission_metadata.yaml", "r", encoding="utf-8") as f:
+                        st.session_state.yaml_content = f.read()
+                else:
+                    st.session_state.yaml_content = ""
+                    
+        except Exception as e:
+            st.error(f"Failed to read submission file: {e}")
     else:
-        st.warning("⚠️ Please upload a candidates dataset in the sidebar or toggle 'Use Sample Dataset' to use the pre-loaded pool.")
-        
-    if file_data is not None:
-        # Simulate progress bar
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        steps = [
-            ("Initializing pipeline...", 0.1, 20),
-            ("Loading candidates database...", 0.1, 40),
-            ("Filtering honeypot profiles...", 0.2, 60),
-            ("Evaluating technical match & behavioral signals...", 0.1, 80),
-            ("Finalizing candidate ranking...", 0.1, 100)
-        ]
-
-        for text, duration, progress in steps:
-            status_text.text(text)
-            time.sleep(duration)
-            progress_bar.progress(progress)
-            
-        # Clean up progress bar
-        progress_bar.empty()
-        status_text.empty()
-        
-        # Execute the ranker using the cached function
-        final_list, total_count, honeypots, csv_content = cached_process_and_rank(
-            file_data,
-            file_suffix,
-            notice_period_cap,
-            min_experience,
-            tech_weight,
-            behavioral_weight
-        )
-        
-        # Save to disk
-        with open("submission.csv", "w", encoding="utf-8", newline="") as csv_file:
-            csv_file.write(csv_content)
-            
-        # Save updated metadata to disk
-        updated_yaml = update_yaml_metadata("submission_metadata.yaml", team_name, contact_email)
-        with open("submission_metadata.yaml", "w", encoding="utf-8") as yaml_file:
-            yaml_file.write(updated_yaml)
-            
-        # Store in session state for cross-interaction persistence
-        st.session_state.ranked_list = final_list
-        st.session_state.total_candidates = total_count
-        st.session_state.honeypot_count = honeypots
-        st.session_state.csv_content = csv_content
-        st.session_state.yaml_content = updated_yaml
-        
-        # Execute checks on the saved submission.csv
-        st.session_state.validation_results = run_submission_checks(
-            "submission.csv", 
-            final_list, 
-            total_count, 
-            honeypots
-        )
-        
-        st.success("🎉 Ranking complete! Results successfully loaded.")
+        st.info("💡 Select a submission CSV file in the sidebar or upload one to get started.")
 
 # Display results if they exist in state
 if "ranked_list" in st.session_state and st.session_state.ranked_list:
@@ -695,154 +1023,165 @@ if "ranked_list" in st.session_state and st.session_state.ranked_list:
         "Fit Rationale"
     ])
     
+    is_missing_profile = (selected_cand["profile"].get("current_title") == "Profile Details Missing")
+    
     with tab1:
-        st.subheader("Demographics & Career Summary")
-        prof = selected_cand["profile"]
-        st.markdown(f"""
-        <div class="glass-panel">
-            <h3 style="margin-top:0; color:#00f2fe;">{prof.get("anonymized_name", "N/A")}</h3>
-            <p style="font-size:1.15rem; font-weight:600; color:#e2e8f0; margin-bottom: 0.5rem;">
-                {prof.get("current_title", "N/A")} at <span style="color:#4facfe;">{prof.get("current_company", "N/A")}</span>
-            </p>
-            <p style="color:#a0aec0; margin-bottom:1rem; font-size:0.95rem;">
-                📍 {prof.get("location", "N/A")}, {prof.get("country", "")} | 💼 {prof.get("years_of_experience", 0)} Years of Experience
-            </p>
-            <div style="border-top: 1px solid #2d3748; padding-top: 1rem; margin-top: 1rem;">
-                <p style="font-style:italic; color:#cbd5e0; line-height:1.6; margin:0;">"{prof.get("summary", "")}"</p>
+        if is_missing_profile:
+            st.warning("⚠️ Profile details are missing from the current candidate database. To see demographical info and career history, select the correct Candidate Profile Database in the sidebar (e.g. candidates.jsonl).")
+        else:
+            st.subheader("Demographics & Career Summary")
+            prof = selected_cand["profile"]
+            st.markdown(f"""
+            <div class="glass-panel">
+                <h3 style="margin-top:0; color:#00f2fe;">{prof.get("anonymized_name", "N/A")}</h3>
+                <p style="font-size:1.15rem; font-weight:600; color:#e2e8f0; margin-bottom: 0.5rem;">
+                    {prof.get("current_title", "N/A")} at <span style="color:#4facfe;">{prof.get("current_company", "N/A")}</span>
+                </p>
+                <p style="color:#a0aec0; margin-bottom:1rem; font-size:0.95rem;">
+                    📍 {prof.get("location", "N/A")}, {prof.get("country", "")} | 💼 {prof.get("years_of_experience", 0)} Years of Experience
+                </p>
+                <div style="border-top: 1px solid #2d3748; padding-top: 1rem; margin-top: 1rem;">
+                    <p style="font-style:italic; color:#cbd5e0; line-height:1.6; margin:0;">"{prof.get("summary", "")}"</p>
+                </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.subheader("Career Timeline")
-        timeline_html = '<div class="timeline">'
-        for job in selected_cand.get("career_history", []):
-            start = job.get("start_date", "N/A")
-            end = job.get("end_date") or "Present"
-            duration = job.get("duration_months", 0)
-            title = job.get("title", "N/A")
-            company = job.get("company", "N/A")
-            desc = job.get("description", "")
+            """, unsafe_allow_html=True)
             
-            timeline_html += f"""<div class="timeline-item">
-<div class="timeline-dot"></div>
-<div class="timeline-content">
-<div class="timeline-time">{start} to {end} ({duration} months)</div>
-<div class="timeline-title">{title}</div>
-<div class="timeline-company">{company}</div>
-<p style="margin: 0; color: #cbd5e0; font-size: 0.95rem; line-height: 1.5;">{desc}</p>
-</div>
-</div>"""
-        timeline_html += '</div>'
-        st.markdown(timeline_html, unsafe_allow_html=True)
+            st.subheader("Career Timeline")
+            timeline_html = '<div class="timeline">'
+            for job in selected_cand.get("career_history", []):
+                start = job.get("start_date", "N/A")
+                end = job.get("end_date") or "Present"
+                duration = job.get("duration_months", 0)
+                title = job.get("title", "N/A")
+                company = job.get("company", "N/A")
+                desc = job.get("description", "")
+                
+                timeline_html += f"""<div class="timeline-item">
+    <div class="timeline-dot"></div>
+    <div class="timeline-content">
+    <div class="timeline-time">{start} to {end} ({duration} months)</div>
+    <div class="timeline-title">{title}</div>
+    <div class="timeline-company">{company}</div>
+    <p style="margin: 0; color: #cbd5e0; font-size: 0.95rem; line-height: 1.5;">{desc}</p>
+    </div>
+    </div>"""
+            timeline_html += '</div>'
+            st.markdown(timeline_html, unsafe_allow_html=True)
         
     with tab2:
-        st.subheader("Candidate Skills Portfolio")
-        skills_data = selected_cand.get("skills", [])
-        if skills_data:
-            df_skills = pd.DataFrame(skills_data)
-            df_skills = df_skills.sort_values(by="duration_months", ascending=True)
-            
-            fig = px.bar(
-                df_skills,
-                x="duration_months",
-                y="name",
-                orientation='h',
-                color="duration_months",
-                color_continuous_scale=[[0, '#00f2fe'], [1, '#4facfe']],
-                labels={"duration_months": "Months of Experience", "name": "Skill Name"},
-                height=max(350, len(df_skills) * 30)
-            )
-            
-            fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font_color='#ffffff',
-                font_family='Outfit',
-                xaxis=dict(
-                    showgrid=True, 
-                    gridcolor='#2d3748',
-                    title_font=dict(size=12, family='Outfit'),
-                    tickfont=dict(size=10, family='Outfit')
-                ),
-                yaxis=dict(
-                    showgrid=False,
-                    title_font=dict(size=12, family='Outfit'),
-                    tickfont=dict(size=10, family='Outfit')
-                ),
-                coloraxis_showscale=False,
-                margin=dict(l=150, r=20, t=20, b=40)
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        if is_missing_profile:
+            st.warning("⚠️ Profile details are missing from the current candidate database. Cannot render skills chart.")
         else:
-            st.info("No skills data listed for this candidate.")
+            st.subheader("Candidate Skills Portfolio")
+            skills_data = selected_cand.get("skills", [])
+            if skills_data:
+                df_skills = pd.DataFrame(skills_data)
+                df_skills = df_skills.sort_values(by="duration_months", ascending=True)
+                
+                fig = px.bar(
+                    df_skills,
+                    x="duration_months",
+                    y="name",
+                    orientation='h',
+                    color="duration_months",
+                    color_continuous_scale=[[0, '#00f2fe'], [1, '#4facfe']],
+                    labels={"duration_months": "Months of Experience", "name": "Skill Name"},
+                    height=max(350, len(df_skills) * 30)
+                )
+                
+                fig.update_layout(
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    font_color='#ffffff',
+                    font_family='Outfit',
+                    xaxis=dict(
+                        showgrid=True, 
+                        gridcolor='#2d3748',
+                        title_font=dict(size=12, family='Outfit'),
+                        tickfont=dict(size=10, family='Outfit')
+                    ),
+                    yaxis=dict(
+                        showgrid=False,
+                        title_font=dict(size=12, family='Outfit'),
+                        tickfont=dict(size=10, family='Outfit')
+                    ),
+                    coloraxis_showscale=False,
+                    margin=dict(l=150, r=20, t=20, b=40)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No skills data listed for this candidate.")
             
     with tab3:
-        st.subheader("Platform Activity & Recruiter Signals")
-        sig = selected_cand.get("redrob_signals", {})
-        
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Recruiter Response Rate</div>
-                <div class="metric-value">{int(sig.get("recruiter_response_rate", 0.0) * 100)}%</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with m2:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Avg Response Time</div>
-                <div class="metric-value">{sig.get("avg_response_time_hours", 0.0):.1f} hrs</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with m3:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Notice Period</div>
-                <div class="metric-value">{sig.get("notice_period_days", 0)} days</div>
-            </div>
-            """, unsafe_allow_html=True)
+        if is_missing_profile:
+            st.warning("⚠️ Profile details are missing from the current candidate database. Cannot render behavioral indicators.")
+        else:
+            st.subheader("Platform Activity & Recruiter Signals")
+            sig = selected_cand.get("redrob_signals", {})
             
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        m4, m5, m6 = st.columns(3)
-        with m4:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Open to Work</div>
-                <div class="metric-value" style="color: {'#00f2fe' if sig.get('open_to_work_flag') else '#e2e8f0'};">
-                    {'Yes' if sig.get('open_to_work_flag') else 'No'}
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Recruiter Response Rate</div>
+                    <div class="metric-value">{int(sig.get("recruiter_response_rate", 0.0) * 100)}%</div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
-        with m5:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Willing to Relocate</div>
-                <div class="metric-value" style="color: {'#00f2fe' if sig.get('willing_to_relocate') else '#e2e8f0'};">
-                    {'Yes' if sig.get('willing_to_relocate') else 'No'}
+                """, unsafe_allow_html=True)
+            with m2:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Avg Response Time</div>
+                    <div class="metric-value">{sig.get("avg_response_time_hours", 0.0):.1f} hrs</div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
-        with m6:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">GitHub Activity Score</div>
-                <div class="metric-value">{sig.get("github_activity_score", "N/A")}</div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+            with m3:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Notice Period</div>
+                    <div class="metric-value">{sig.get("notice_period_days", 0)} days</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            st.markdown("<br>", unsafe_allow_html=True)
             
-        st.subheader("Engagement Details (Last 30 Days)")
-        details_df = pd.DataFrame([{
-            "Profile Completeness": f"{sig.get('profile_completeness_score', 0):.1f}%",
-            "Profile Views": sig.get("profile_views_received_30d", 0),
-            "Applications Submitted": sig.get("applications_submitted_30d", 0),
-            "Search Appearances": sig.get("search_appearance_30d", 0),
-            "Saved by Recruiters": sig.get("saved_by_recruiters_30d", 0),
-            "Interview Completion Rate": f"{int(sig.get('interview_completion_rate', 0.0) * 100)}%" if sig.get('interview_completion_rate', -1) != -1 else "N/A",
-            "Offer Acceptance Rate": f"{int(sig.get('offer_acceptance_rate', 0.0) * 100)}%" if sig.get('offer_acceptance_rate', -1) != -1 else "N/A"
-        }])
-        st.dataframe(details_df, use_container_width=True, hide_index=True)
+            m4, m5, m6 = st.columns(3)
+            with m4:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Open to Work</div>
+                    <div class="metric-value" style="color: {'#00f2fe' if sig.get('open_to_work_flag') else '#e2e8f0'};">
+                        {'Yes' if sig.get('open_to_work_flag') else 'No'}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            with m5:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Willing to Relocate</div>
+                    <div class="metric-value" style="color: {'#00f2fe' if sig.get('willing_to_relocate') else '#e2e8f0'};">
+                        {'Yes' if sig.get('willing_to_relocate') else 'No'}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            with m6:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">GitHub Activity Score</div>
+                    <div class="metric-value">{sig.get("github_activity_score", "N/A")}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            st.subheader("Engagement Details (Last 30 Days)")
+            details_df = pd.DataFrame([{
+                "Profile Completeness": f"{sig.get('profile_completeness_score', 0):.1f}%",
+                "Profile Views": sig.get("profile_views_received_30d", 0),
+                "Applications Submitted": sig.get("applications_submitted_30d", 0),
+                "Search Appearances": sig.get("search_appearance_30d", 0),
+                "Saved by Recruiters": sig.get("saved_by_recruiters_30d", 0),
+                "Interview Completion Rate": f"{int(sig.get('interview_completion_rate', 0.0) * 100)}%" if sig.get('interview_completion_rate', -1) != -1 else "N/A",
+                "Offer Acceptance Rate": f"{int(sig.get('offer_acceptance_rate', 0.0) * 100)}%" if sig.get('offer_acceptance_rate', -1) != -1 else "N/A"
+            }])
+            st.dataframe(details_df, use_container_width=True, hide_index=True)
         
     with tab4:
         st.subheader("Algorithmic Assessment Summary")
@@ -858,98 +1197,101 @@ if "ranked_list" in st.session_state and st.session_state.ranked_list:
         # Interactive Score Breakdown
         st.subheader("Interactive Score Breakdown & Rules Inspection")
         
-        breakdown = get_score_breakdown(
-            selected_cand, 
-            notice_period_cap, 
-            min_experience, 
-            tech_weight, 
-            behavioral_weight
-        )
-        
-        b_col1, b_col2, b_col3 = st.columns(3)
-        
-        with b_col1:
-            st.markdown(f"""
-            <div class="glass-panel" style="padding: 1rem; height: 100%;">
-                <h4 style="margin-top:0; color:#00f2fe;">1. Base Skill Fit</h4>
-                <p style="margin-bottom:0.5rem; font-size: 1rem;"><strong>Experience Score:</strong> {breakdown['exp_score']}/100</p>
-                <p style="font-size:0.85rem; color:#a0aec0; margin-bottom: 1.25rem;">Status: {breakdown['exp_status']} ({breakdown['exp_years']:.1f} yoe)</p>
+        if is_missing_profile:
+            st.info("⚠️ Candidate profile details are missing from the current database. Cannot show detailed algorithmic breakdown.")
+        else:
+            breakdown = get_score_breakdown(
+                selected_cand, 
+                notice_period_cap, 
+                min_experience, 
+                tech_weight, 
+                behavioral_weight
+            )
+            
+            b_col1, b_col2, b_col3 = st.columns(3)
+            
+            with b_col1:
+                st.markdown(f"""
+                <div class="glass-panel" style="padding: 1rem; height: 100%;">
+                    <h4 style="margin-top:0; color:#00f2fe;">1. Base Skill Fit</h4>
+                    <p style="margin-bottom:0.5rem; font-size: 1rem;"><strong>Experience Score:</strong> {breakdown['exp_score']}/100</p>
+                    <p style="font-size:0.85rem; color:#a0aec0; margin-bottom: 1.25rem;">Status: {breakdown['exp_status']} ({breakdown['exp_years']:.1f} yoe)</p>
+                    
+                    <p style="margin-bottom:0.25rem; font-size: 1rem;"><strong>Technical Score:</strong> {breakdown['tech_score']:.1f}/100</p>
+                    <ul style="font-size:0.85rem; color:#cbd5e0; padding-left:1.25rem; margin-top:0;">
+                        <li style="margin-bottom:0.25rem;">Vector/Embedding: {breakdown['vector_score']}/30</li>
+                        <li style="margin-bottom:0.25rem;">Search & IR: {breakdown['ir_score']}/25</li>
+                        <li style="margin-bottom:0.25rem;">ML & Tuning: {breakdown['ml_score']}/25</li>
+                        <li style="margin-bottom:0.25rem;">Eval Frameworks: {breakdown['eval_score']}/20</li>
+                    </ul>
+                    <p style="border-top:1px solid #2d3748; padding-top:0.5rem; margin-top:0.75rem; margin-bottom:0; font-size: 1.05rem;">
+                        <strong>Composite:</strong> {breakdown['composite_score']:.1f}/100
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
                 
-                <p style="margin-bottom:0.25rem; font-size: 1rem;"><strong>Technical Score:</strong> {breakdown['tech_score']:.1f}/100</p>
-                <ul style="font-size:0.85rem; color:#cbd5e0; padding-left:1.25rem; margin-top:0;">
-                    <li style="margin-bottom:0.25rem;">Vector/Embedding: {breakdown['vector_score']}/30</li>
-                    <li style="margin-bottom:0.25rem;">Search & IR: {breakdown['ir_score']}/25</li>
-                    <li style="margin-bottom:0.25rem;">ML & Tuning: {breakdown['ml_score']}/25</li>
-                    <li style="margin-bottom:0.25rem;">Eval Frameworks: {breakdown['eval_score']}/20</li>
-                </ul>
-                <p style="border-top:1px solid #2d3748; padding-top:0.5rem; margin-top:0.75rem; margin-bottom:0; font-size: 1.05rem;">
-                    <strong>Composite:</strong> {breakdown['composite_score']:.1f}/100
+            with b_col2:
+                html_col2 = f"""
+                <div class="glass-panel" style="padding: 1rem; height: 100%;">
+                    <h4 style="margin-top:0; color:#00f2fe;">2. Disqualifiers (Multipliers)</h4>
+                    <ul style="list-style-type:none; padding-left:0; margin:0;">
+                """
+                for d_name, d_val in breakdown['disqualifiers'].items():
+                    icon = "🚨" if d_val['value'] else "✅"
+                    color = "#ff4b4b" if d_val['value'] else "#00f2fe"
+                    html_col2 += f"""
+                    <li style="margin-bottom: 0.75rem;">
+                        <span style="font-size:1.1rem;">{icon}</span> <strong>{d_name}:</strong> 
+                        <span style="color:{color}; font-weight:600;">{d_val['multiplier']:.2f}x</span>
+                        <p style="font-size:0.8rem; color:#cbd5e0; margin:0; line-height:1.3;">{d_val['reason']}</p>
+                    </li>
+                    """
+                html_col2 += f"""
+                    </ul>
+                    <p style="border-top:1px solid #2d3748; padding-top:0.5rem; margin-top:0.5rem; margin-bottom:0; font-size: 1.05rem;">
+                        <strong>Total Penalty Mult:</strong> {breakdown['disqualifier_mult_total']:.4f}x
+                    </p>
+                </div>
+                """
+                st.markdown(html_col2, unsafe_allow_html=True)
+                
+            with b_col3:
+                html_col3 = f"""
+                <div class="glass-panel" style="padding: 1rem; height: 100%;">
+                    <h4 style="margin-top:0; color:#00f2fe;">3. Behavioral Multipliers</h4>
+                    <ul style="list-style-type:none; padding-left:0; margin:0;">
+                """
+                for b_name, b_val in breakdown['behavior_multipliers'].items():
+                    html_col3 += f"""
+                    <li style="margin-bottom: 0.5rem;">
+                        <strong>{b_name}:</strong> <span style="color:#4facfe; font-weight:600;">{b_val[0]:.2f}x</span>
+                        <p style="font-size:0.8rem; color:#cbd5e0; margin:0; line-height:1.2;">{b_val[1]}</p>
+                    </li>
+                    """
+                html_col3 += f"""
+                    </ul>
+                    <p style="border-top:1px solid #2d3748; padding-top:0.5rem; margin-top:0.5rem; margin-bottom:0; font-size: 1.05rem;">
+                        <strong>Total Behavioral Mult:</strong> {breakdown['behavior_mult_total']:.4f}x
+                    </p>
+                </div>
+                """
+                st.markdown(html_col3, unsafe_allow_html=True)
+                
+            # Overall Score Formula Display
+            st.markdown(f"""
+            <div class="glass-panel" style="text-align: center; margin-top: 1rem; border: 1px solid #4facfe;">
+                <h4 style="margin-top:0; color:#4facfe; font-weight:700;">Overall Match Score Calculation</h4>
+                <p style="font-size:1.15rem; font-weight:500; margin:0; color:#cbd5e0; font-family:'Outfit';">
+                    Formula: Score = (Base Skill Fit * Disqualifiers Multiplier * Behavioral Multiplier) / 100
+                </p>
+                <p style="font-size:1.35rem; font-weight:700; margin:0.5rem 0 0 0; color:#ffffff; font-family:'Outfit';">
+                    ({breakdown['composite_score']:.2f} * {breakdown['disqualifier_mult_total']:.4f} * {breakdown['behavior_mult_total']:.4f}) / 100 = 
+                    <span style="background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight:800; font-size:1.65rem;">
+                        {breakdown['final_score']:.3f}
+                    </span>
                 </p>
             </div>
             """, unsafe_allow_html=True)
-            
-        with b_col2:
-            html_col2 = f"""
-            <div class="glass-panel" style="padding: 1rem; height: 100%;">
-                <h4 style="margin-top:0; color:#00f2fe;">2. Disqualifiers (Multipliers)</h4>
-                <ul style="list-style-type:none; padding-left:0; margin:0;">
-            """
-            for d_name, d_val in breakdown['disqualifiers'].items():
-                icon = "🚨" if d_val['value'] else "✅"
-                color = "#ff4b4b" if d_val['value'] else "#00f2fe"
-                html_col2 += f"""
-                <li style="margin-bottom: 0.75rem;">
-                    <span style="font-size:1.1rem;">{icon}</span> <strong>{d_name}:</strong> 
-                    <span style="color:{color}; font-weight:600;">{d_val['multiplier']:.2f}x</span>
-                    <p style="font-size:0.8rem; color:#cbd5e0; margin:0; line-height:1.3;">{d_val['reason']}</p>
-                </li>
-                """
-            html_col2 += f"""
-                </ul>
-                <p style="border-top:1px solid #2d3748; padding-top:0.5rem; margin-top:0.5rem; margin-bottom:0; font-size: 1.05rem;">
-                    <strong>Total Penalty Mult:</strong> {breakdown['disqualifier_mult_total']:.4f}x
-                </p>
-            </div>
-            """
-            st.markdown(html_col2, unsafe_allow_html=True)
-            
-        with b_col3:
-            html_col3 = f"""
-            <div class="glass-panel" style="padding: 1rem; height: 100%;">
-                <h4 style="margin-top:0; color:#00f2fe;">3. Behavioral Multipliers</h4>
-                <ul style="list-style-type:none; padding-left:0; margin:0;">
-            """
-            for b_name, b_val in breakdown['behavior_multipliers'].items():
-                html_col3 += f"""
-                <li style="margin-bottom: 0.5rem;">
-                    <strong>{b_name}:</strong> <span style="color:#4facfe; font-weight:600;">{b_val[0]:.2f}x</span>
-                    <p style="font-size:0.8rem; color:#cbd5e0; margin:0; line-height:1.2;">{b_val[1]}</p>
-                </li>
-                """
-            html_col3 += f"""
-                </ul>
-                <p style="border-top:1px solid #2d3748; padding-top:0.5rem; margin-top:0.5rem; margin-bottom:0; font-size: 1.05rem;">
-                    <strong>Total Behavioral Mult:</strong> {breakdown['behavior_mult_total']:.4f}x
-                </p>
-            </div>
-            """
-            st.markdown(html_col3, unsafe_allow_html=True)
-            
-        # Overall Score Formula Display
-        st.markdown(f"""
-        <div class="glass-panel" style="text-align: center; margin-top: 1rem; border: 1px solid #4facfe;">
-            <h4 style="margin-top:0; color:#4facfe; font-weight:700;">Overall Match Score Calculation</h4>
-            <p style="font-size:1.15rem; font-weight:500; margin:0; color:#cbd5e0; font-family:'Outfit';">
-                Formula: Score = (Base Skill Fit * Disqualifiers Multiplier * Behavioral Multiplier) / 100
-            </p>
-            <p style="font-size:1.35rem; font-weight:700; margin:0.5rem 0 0 0; color:#ffffff; font-family:'Outfit';">
-                ({breakdown['composite_score']:.2f} * {breakdown['disqualifier_mult_total']:.4f} * {breakdown['behavior_mult_total']:.4f}) / 100 = 
-                <span style="background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight:800; font-size:1.65rem;">
-                    {breakdown['final_score']:.3f}
-                </span>
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
         
     st.markdown("<br><hr>", unsafe_allow_html=True)
     
