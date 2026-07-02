@@ -69,13 +69,19 @@ def load_profiles_for_candidates(candidate_ids, db_path):
         try:
             with open(db_path, "r", encoding="utf-8") as f:
                 candidates_data = json.load(f)
-                for cand in candidates_data:
-                    cid = cand.get("candidate_id")
-                    if cid in candidate_ids_set:
-                        found_profiles[cid] = cand
-                        candidate_ids_set.remove(cid)
-                    if not candidate_ids_set:
-                        break
+                if isinstance(candidates_data, dict):
+                    for cid in list(candidate_ids_set):
+                        if cid in candidates_data:
+                            found_profiles[cid] = candidates_data[cid]
+                            candidate_ids_set.remove(cid)
+                else:
+                    for cand in candidates_data:
+                        cid = cand.get("candidate_id")
+                        if cid in candidate_ids_set:
+                            found_profiles[cid] = cand
+                            candidate_ids_set.remove(cid)
+                        if not candidate_ids_set:
+                            break
         except Exception as e:
             st.error(f"Error reading candidate database {db_path}: {e}")
             
@@ -573,11 +579,15 @@ if "ranked_list" not in st.session_state:
         # Default choice db
         sibling_path = "../../../[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
         abs_path = r"C:\Users\Manya\Downloads\[PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\candidates.jsonl"
-        db_path = "sample_candidates.json"
-        if os.path.exists(sibling_path):
+        
+        if os.path.exists("submission_profiles.json"):
+            db_path = "submission_profiles.json"
+        elif os.path.exists(sibling_path):
             db_path = sibling_path
         elif os.path.exists(abs_path):
             db_path = abs_path
+        else:
+            db_path = "sample_candidates.json"
             
         try:
             df_csv = pd.read_csv(selected_file)
@@ -718,6 +728,10 @@ else:
     # Candidate Database Path
     st.sidebar.markdown("### Candidate Profile Database")
     db_options = ["sample_candidates.json"]
+    
+    if os.path.exists("submission_profiles.json"):
+        db_options.insert(0, "submission_profiles.json")
+        
     sibling_path = "../../../[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl"
     abs_path = r"C:\Users\Manya\Downloads\[PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\candidates.jsonl"
     
@@ -726,9 +740,9 @@ else:
     elif os.path.exists(abs_path):
         db_options.append(abs_path)
         
-    # Default to the full database path if available (index 1)
+    # Default to the most local/fullest database path if available (index 0 if submission_profiles.json exists)
     default_db_index = 0
-    if len(db_options) > 1:
+    if "submission_profiles.json" not in db_options and len(db_options) > 1:
         default_db_index = 1
         
     db_path = st.sidebar.selectbox("Candidate Profiles DB Path", db_options, index=default_db_index)
