@@ -1,5 +1,9 @@
 # Redrob Candidate Ranking System
 
+[![Live Website](https://img.shields.io/badge/Streamlit-Live%20Website-FF4B4B?style=for-the-badge&logo=Streamlit)](https://o4xtetvbrmrlmqcpbhz9mv.streamlit.app/)
+
+👉 **[Try it Live](https://o4xtetvbrmrlmqcpbhz9mv.streamlit.app/)**
+
 A top-tier candidate ranking solution for the **Intelligent Candidate Discovery & Ranking Challenge**.
 
 ## Architecture
